@@ -194,29 +194,51 @@
     skyCtx.fillRect(0, 0, w, h);
   }
 
-  // Distant, hazy forest silhouette ringing the clearing — gives the scene a
-  // sense of surrounding woods instead of an empty void, without competing
-  // with the fire itself (there is a cleared gap directly behind the flame).
+  // Distant pine trees ringing the clearing — tall trunks with layered
+  // conifer canopies, giving a sense of surrounding woods instead of an
+  // empty void (there is a cleared gap directly behind the flame so the
+  // fire itself always reads clearly against the sky).
   function drawForest(fx, fy) {
     const horizon = fy + 8;
-    const n = 30;
+    const n = 22;
     for (let i = 0; i < n; i++) {
-      const x = ((i + 0.5) / n) * state.w + (hashN(i * 9.1) - 0.5) * 50;
-      if (Math.abs(x - fx) < 95) continue;
-      const depth = hashN(i * 4.3);
-      const height = (55 + depth * 150 + hashN(i * 13.7) * 40);
-      const width = 24 + depth * 50;
-      const topY = horizon - height;
-      const tone = Math.round(6 + depth * 9);
-      skyCtx.fillStyle = `rgb(${tone},${tone + 3},${tone + 6})`;
-      for (let k = 0; k < 3; k++) {
-        const cy = topY + k * height * 0.3;
-        const cw = width * (0.95 - k * 0.22);
+      const x = ((i + 0.5) / n) * state.w + (hashN(i * 9.1) - 0.5) * 60;
+      if (Math.abs(x - fx) < 100) continue;
+      const depth = hashN(i * 4.3); // 0 = closer/larger, 1 = further/smaller
+      const trunkH = 130 + depth * 230 + hashN(i * 13.7) * 50;
+      const trunkW = 5 + (1 - depth) * 7;
+      const canopyW = 30 + (1 - depth) * 46;
+      const tone = Math.round(5 + depth * 7);
+      const trunkTone = Math.round(10 + depth * 8);
+
+      // trunk, tapering slightly toward the top
+      skyCtx.fillStyle = `rgb(${trunkTone},${trunkTone - 1},${trunkTone - 1})`;
+      skyCtx.beginPath();
+      skyCtx.moveTo(x - trunkW * 0.5, horizon);
+      skyCtx.lineTo(x - trunkW * 0.22, horizon - trunkH);
+      skyCtx.lineTo(x + trunkW * 0.22, horizon - trunkH);
+      skyCtx.lineTo(x + trunkW * 0.5, horizon);
+      skyCtx.closePath();
+      skyCtx.fill();
+
+      // layered conifer canopy — stacked tapering triangles, wide at the
+      // bottom of the crown and narrowing toward a point at the top
+      const crownBase = horizon - trunkH * 0.42;
+      const crownTop = horizon - trunkH * 1.02;
+      const layers = 5;
+      skyCtx.fillStyle = `rgb(${tone},${tone + 3},${tone + 2})`;
+      for (let k = 0; k < layers; k++) {
+        const t = k / (layers - 1);
+        const ly = crownBase + (crownTop - crownBase) * t;
+        const lw = canopyW * (1 - t * 0.82);
+        const lh = (crownBase - crownTop) / layers * 1.7;
         skyCtx.beginPath();
-        skyCtx.ellipse(x + (hashN(i * 17 + k) - 0.5) * 10, cy, cw * 0.5, height * 0.24, 0, 0, Math.PI * 2);
+        skyCtx.moveTo(x - lw * 0.5, ly + lh);
+        skyCtx.lineTo(x, ly - lh * 0.3);
+        skyCtx.lineTo(x + lw * 0.5, ly + lh);
+        skyCtx.closePath();
         skyCtx.fill();
       }
-      skyCtx.fillRect(x - width * 0.08, topY + height * 0.5, width * 0.16, height * 0.55);
     }
   }
 
@@ -366,9 +388,10 @@
     drawShrub(stumpX - 50 * scale, stumpY + 16 * scale, scale * 1.3, 4);
     drawStumpSeat(stumpX, stumpY, scale * 1.35, fx, fy, flick);
 
-    // Fallen-log seat: further back, upper-right of the fire.
-    const logX = fx + ringR * 1.9;
-    const logY = fy - ringR * 1.0;
+    // Fallen-log seat: further back-right of the fire, but still resting
+    // clearly on the lit ground (not up in the dark sky/forest band).
+    const logX = fx + ringR * 1.85;
+    const logY = fy + ringR * 0.12;
     drawLogSeat(logX, logY, scale * 1.05, -0.34, fx, fy, flick);
     drawShrub(logX + 58 * scale, logY + 30 * scale, scale * 0.8, 11);
 
@@ -382,21 +405,45 @@
     const baseY = fy + 50;
 
     // --- glowing ember bed: hot coals visible beneath/between the logs ---
-    const emberCount = 9;
+    const emberCount = 11;
     for (let i = 0; i < emberCount; i++) {
-      const ex = fx + (hashN(i * 2.7) - 0.5) * 78 * scale;
-      const ey = baseY - 2 + (hashN(i * 5.3) - 0.5) * 16 * scale;
+      const ex = fx + (hashN(i * 2.7) - 0.5) * 84 * scale;
+      const ey = baseY - 2 + (hashN(i * 5.3) - 0.5) * 18 * scale;
       const pulse = 0.6 + Math.sin(state.time * (4 + hashN(i * 9) * 3) + i) * 0.4;
-      const r = (7 + hashN(i * 3.9) * 7) * scale * (0.7 + state.fuel * 0.18);
+      const r = (6 + hashN(i * 3.9) * 7) * scale * (0.75 + state.fuel * 0.18);
       const hot = Math.max(0, Math.min(1, pulse * flick));
+      // Real embers glow red-orange, not pale yellow-white — keep the core
+      // warm orange and let it fall off through red before fading to black.
       const grd = skyCtx.createRadialGradient(ex, ey, 0, ex, ey, r);
-      grd.addColorStop(0, `rgba(255,${210 + hot * 40},${120 + hot * 80},${0.85 * hot + 0.15})`);
-      grd.addColorStop(0.6, `rgba(255,120,30,${0.35 * hot})`);
-      grd.addColorStop(1, "rgba(255,80,10,0)");
+      grd.addColorStop(0, `rgba(255,${150 + hot * 70},${35 + hot * 55},${0.85 * hot + 0.15})`);
+      grd.addColorStop(0.5, `rgba(226,${70 + hot * 30},18,${0.5 * hot})`);
+      grd.addColorStop(1, "rgba(150,20,5,0)");
       skyCtx.fillStyle = grd;
       skyCtx.beginPath();
       skyCtx.arc(ex, ey, r, 0, 7);
       skyCtx.fill();
+    }
+
+    // --- scattered charred wood chunks & ash sitting among the embers ---
+    for (let i = 0; i < 6; i++) {
+      const cx = fx + (hashN(i * 6.1 + 50) - 0.5) * 90 * scale;
+      const cy = baseY + 2 + (hashN(i * 8.4 + 50) - 0.5) * 14 * scale;
+      const cw = (10 + hashN(i * 3.3 + 50) * 10) * scale;
+      skyCtx.save();
+      skyCtx.translate(cx, cy);
+      skyCtx.rotate(hashN(i * 9.7 + 50) * Math.PI);
+      skyCtx.fillStyle = `rgba(14,10,9,${0.75 + flick * 0.1})`;
+      skyCtx.beginPath();
+      skyCtx.ellipse(0, 0, cw, cw * 0.42, 0, 0, Math.PI * 2);
+      skyCtx.fill();
+      // a thin glowing crack along one edge, lit by the embers beneath
+      skyCtx.strokeStyle = `rgba(255,${110 + flick * 60},40,${0.55 * flick})`;
+      skyCtx.lineWidth = Math.max(1, 1.2 * scale);
+      skyCtx.beginPath();
+      skyCtx.moveTo(-cw * 0.6, cw * 0.1);
+      skyCtx.lineTo(cw * 0.6, -cw * 0.05);
+      skyCtx.stroke();
+      skyCtx.restore();
     }
 
     // --- teepee poles leaning in toward the flame, charred, lit from below ---
@@ -416,11 +463,14 @@
       const ax = fx + p.bx * scale, ay = baseY + 6 * scale;
       const bx = fx + p.apx * scale, by = baseY - p.h * scale;
       const grd = skyCtx.createLinearGradient(ax, ay, bx, by);
-      const warm = 0.5 + flick * 0.5;
-      grd.addColorStop(0, `rgba(${90 + warm * 120},${50 + warm * 60},${20 + warm * 20},1)`);
-      grd.addColorStop(0.18, "rgba(55,32,20,1)");
-      grd.addColorStop(0.6, "rgba(28,20,17,1)");
-      grd.addColorStop(1, "rgba(16,12,11,1)");
+      const warm = 0.55 + flick * 0.45;
+      // Glowing, ember-lit near the base; charred black through the middle;
+      // a faint warm rim-light catches the tip where the flame wraps it.
+      grd.addColorStop(0, `rgba(${110 + warm * 130},${45 + warm * 55},${14 + warm * 14},1)`);
+      grd.addColorStop(0.14, "rgba(48,26,17,1)");
+      grd.addColorStop(0.55, "rgba(22,16,14,1)");
+      grd.addColorStop(0.92, "rgba(14,10,9,1)");
+      grd.addColorStop(1, `rgba(${60 + warm * 70},${34 + warm * 24},18,1)`);
       skyCtx.strokeStyle = grd;
       skyCtx.lineCap = "round";
       skyCtx.lineWidth = p.w * scale;
@@ -517,14 +567,14 @@
       // lean with wind + a soft "poke" gust, stronger higher up the flame
       float lean = (uWind * 0.55 + sin(uTime * 1.3) * 0.05 + uPoke * 0.9) * pow(h, 1.3);
       float wobble = sin(uTime * 3.1 + h * 5.0) * 0.04 * h;
-      float sx = (p.x - lean * 0.18 - wobble) / (0.16 + h * 0.10);
+      float sx = (p.x - lean * 0.18 - wobble) / (0.125 + h * 0.085);
 
       vec2 q = vec2(sx * 1.6, h * 2.6 - uTime * (1.6 + uFuel * 0.6));
       float n = fbm(q + vec2(0.0, -uTime * 0.4));
       float n2 = fbm(q * 2.3 + 11.0 - vec2(0.0, uTime * 1.1));
 
-      float widthFall = exp(-h * h * (1.15 - uFuel * 0.12));
-      float core = widthFall - abs(sx) * (0.85 - uFuel * 0.08);
+      float widthFall = exp(-h * h * (1.3 - uFuel * 0.1));
+      float core = widthFall - abs(sx) * (0.95 - uFuel * 0.07);
       float flame = core + (n - 0.5) * 0.55 + (n2 - 0.5) * 0.22 - h * 0.18;
       flame += uPoke * 0.25;
       flame = clamp(flame, 0.0, 1.0);
@@ -537,7 +587,11 @@
       else if (heat < 0.85) col = mix(vec3(0.95,0.35,0.02), vec3(1.0,0.75,0.15), (heat-0.55)/0.30);
       else col = mix(vec3(1.0,0.75,0.15), vec3(1.0,0.98,0.85), clamp((heat-0.85)/0.4,0.0,1.0));
 
-      float alpha = smoothstep(0.08, 0.5, flame) * smoothstep(1.05, 0.15, h);
+      // fade the flame in from zero right at the base instead of a flat
+      // "wall" of fire, so the wood and glowing embers stay visible beneath
+      // and between the rising tongues — matching how a real campfire reads.
+      float baseFade = smoothstep(0.0, 0.14, h);
+      float alpha = smoothstep(0.08, 0.5, flame) * smoothstep(1.05, 0.15, h) * baseFade;
       alpha *= smoothstep(0.0, 0.08, 1.0 - abs(sx) * 0.6);
       gl_FragColor = vec4(col * alpha, alpha);
     }
@@ -590,7 +644,10 @@
       gl.uniform1f(uWind, state.wind);
       gl.uniform1f(uFuel, state.fuel);
       gl.uniform1f(uPoke, state.poke);
-      gl.uniform2f(uBase, fireBaseX() / state.w, fireBaseY() / state.h);
+      // Align the shader's flame base with the drawn logs' base (fireBaseY()+50)
+      // rather than fireBaseY() itself, so the brightest part of the flame
+      // sits in the gap between the logs instead of washing out their tips.
+      gl.uniform2f(uBase, fireBaseX() / state.w, (fireBaseY() + 50 * (Math.min(state.w, state.h) / 1000)) / state.h);
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     };
   } else {
