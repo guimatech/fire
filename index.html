@@ -1,0 +1,616 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<title>Fogueira Interativa</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body {
+    margin: 0; padding: 0; width: 100%; height: 100%;
+    background: #05060a; overflow: hidden; touch-action: none;
+    font-family: -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+  }
+  #stage { position: fixed; inset: 0; }
+  canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+  #sky { z-index: 1; }
+  #fire { z-index: 2; mix-blend-mode: screen; }
+  #fx { z-index: 3; pointer-events: none; }
+  #ui {
+    position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%);
+    z-index: 5; display: flex; gap: 10px; align-items: center;
+    background: rgba(10, 8, 6, .45); backdrop-filter: blur(6px);
+    padding: 10px 14px; border-radius: 999px; border: 1px solid rgba(255,180,100,.18);
+  }
+  .btn {
+    appearance: none; border: 1px solid rgba(255,190,120,.35);
+    background: linear-gradient(180deg, rgba(255,140,40,.25), rgba(90,30,10,.35));
+    color: #ffe9c7; font-size: 13px; padding: 9px 14px; border-radius: 999px;
+    cursor: pointer; user-select: none; white-space: nowrap;
+    transition: transform .12s ease, background .2s ease;
+  }
+  .btn:active { transform: scale(0.93); background: rgba(255,150,60,.5); }
+  #hint {
+    position: fixed; top: 16px; left: 50%; transform: translateX(-50%);
+    z-index: 5; color: rgba(255, 225, 190, .75); font-size: 12.5px;
+    letter-spacing: .02em; text-align: center; pointer-events: none;
+    text-shadow: 0 1px 3px rgba(0,0,0,.8);
+    transition: opacity 1s ease;
+  }
+  #logo {
+    position: fixed; top: 16px; right: 16px; z-index: 5;
+    color: rgba(255,200,140,.55); font-size: 11px; letter-spacing: .08em;
+    text-transform: uppercase; pointer-events: none;
+  }
+  .toggled { background: rgba(255,170,70,.55) !important; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <canvas id="sky"></canvas>
+  <canvas id="fire"></canvas>
+  <canvas id="fx"></canvas>
+</div>
+<div id="hint">Toque ou arraste perto do fogo para soprar o vento &middot; toque na fogueira para atiçar as brasas</div>
+<div id="logo">fogueira de assentos</div>
+<div id="ui">
+  <button class="btn" id="btnBlow">🌬️ Soprar</button>
+  <button class="btn" id="btnLog">🪵 Lenha</button>
+  <button class="btn" id="btnSound">🔇 Som</button>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  // ---------------------------------------------------------------------
+  // Shared state
+  // ---------------------------------------------------------------------
+  const state = {
+    w: 0, h: 0, dpr: Math.min(2, window.devicePixelRatio || 1),
+    pointer: { x: 0.5, y: 0.62, active: false, vx: 0, vy: 0, lastX: 0.5, lastY: 0.62 },
+    wind: 0,          // -1..1 horizontal air current steering the flame
+    windTarget: 0,
+    fuel: 1,          // 1 = normal fire, >1 after stoking / adding wood
+    poke: 0,          // transient "blow" burst strength
+    logs: 2,          // number of logs in the stack (visual + fuel)
+    time: 0,
+    soundOn: false,
+  };
+
+  function resize() {
+    state.w = window.innerWidth;
+    state.h = window.innerHeight;
+    [skyCanvas, fireCanvas, fxCanvas].forEach((c) => {
+      c.width = state.w * state.dpr;
+      c.height = state.h * state.dpr;
+    });
+  }
+
+  // ---------------------------------------------------------------------
+  // Canvas references
+  // ---------------------------------------------------------------------
+  const skyCanvas = document.getElementById("sky");
+  const fireCanvas = document.getElementById("fire");
+  const fxCanvas = document.getElementById("fx");
+  const skyCtx = skyCanvas.getContext("2d");
+  const fxCtx = fxCanvas.getContext("2d");
+
+  // ===========================================================================
+  // 1) NIGHT SKY — stars, gentle gradient, ground glow, logs & stone ring
+  // ===========================================================================
+  let stars = [];
+  function buildStars() {
+    const count = Math.floor((state.w * state.h) / 3600);
+    stars = new Array(count).fill(0).map(() => ({
+      x: Math.random(),
+      y: Math.random() * 0.72,
+      r: Math.random() * 1.4 + 0.2,
+      phase: Math.random() * Math.PI * 2,
+      speed: Math.random() * 0.8 + 0.3,
+    }));
+  }
+
+  function drawSky(t) {
+    const { w, h, dpr } = state;
+    skyCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const g = skyCtx.createLinearGradient(0, 0, 0, h);
+    g.addColorStop(0, "#02030a");
+    g.addColorStop(0.55, "#060a16");
+    g.addColorStop(0.82, "#0d1220");
+    g.addColorStop(1, "#141212");
+    skyCtx.fillStyle = g;
+    skyCtx.fillRect(0, 0, w, h);
+
+    // stars twinkle
+    for (const s of stars) {
+      const tw = 0.55 + Math.sin(t * s.speed + s.phase) * 0.45;
+      skyCtx.globalAlpha = Math.max(0, tw);
+      skyCtx.fillStyle = "#eaf2ff";
+      skyCtx.beginPath();
+      skyCtx.arc(s.x * w, s.y * h, s.r, 0, 7);
+      skyCtx.fill();
+    }
+    skyCtx.globalAlpha = 1;
+
+    // warm ambient glow thrown onto the ground / horizon by the fire
+    const fireX = fireBaseX();
+    const fireY = fireBaseY();
+    const glowR = Math.max(w, h) * 0.55 * (0.85 + state.fuel * 0.18);
+    const glow = skyCtx.createRadialGradient(fireX, fireY, 10, fireX, fireY, glowR);
+    const flick = 0.75 + Math.sin(t * 7.3) * 0.06 + Math.sin(t * 2.1) * 0.05;
+    glow.addColorStop(0, `rgba(255,150,60,${0.35 * flick})`);
+    glow.addColorStop(0.35, `rgba(255,100,30,${0.14 * flick})`);
+    glow.addColorStop(1, "rgba(255,100,30,0)");
+    skyCtx.fillStyle = glow;
+    skyCtx.fillRect(0, 0, w, h);
+
+    drawGround(fireX, fireY, flick);
+    drawStoneRing(fireX, fireY, flick);
+    drawLogs(fireX, fireY, flick);
+  }
+
+  function fireBaseX() { return state.w * 0.5; }
+  function fireBaseY() { return state.h * 0.74; }
+
+  function drawGround(fx, fy, flick) {
+    const { w, h } = state;
+    const groundTop = fy + 18;
+    const g = skyCtx.createLinearGradient(0, groundTop - 40, 0, h);
+    g.addColorStop(0, `rgba(60,40,28,${0.55})`);
+    g.addColorStop(1, "rgba(8,7,8,1)");
+    skyCtx.fillStyle = g;
+    skyCtx.fillRect(0, groundTop - 40, w, h - groundTop + 40);
+
+    // subtle warm patch directly under the fire
+    const patch = skyCtx.createRadialGradient(fx, fy + 30, 4, fx, fy + 30, 220);
+    patch.addColorStop(0, `rgba(255,140,60,${0.22 * flick})`);
+    patch.addColorStop(1, "rgba(255,140,60,0)");
+    skyCtx.fillStyle = patch;
+    skyCtx.fillRect(0, 0, w, h);
+  }
+
+  function hashN(n) {
+    const x = Math.sin(n * 127.1 + 78.233) * 43758.5453;
+    return x - Math.floor(x);
+  }
+
+  function drawStoneRing(fx, fy, flick) {
+    const n = 11;
+    const ringR = Math.min(state.w, state.h) * 0.165;
+    for (let i = 0; i < n; i++) {
+      const a = (i / n) * Math.PI * 2 + 0.3;
+      const jitterR = ringR * (0.94 + hashN(i * 3.1) * 0.18);
+      const x = fx + Math.cos(a) * jitterR;
+      const y = fy + Math.sin(a) * jitterR * 0.38 + 46;
+      const size = 16 + hashN(i * 7.7) * 10;
+      const tone = 60 + hashN(i * 11.3) * 40;
+      skyCtx.save();
+      skyCtx.translate(x, y);
+      skyCtx.rotate(hashN(i * 5.9) * 1.2 - 0.6);
+      const lit = Math.max(0, 1 - Math.abs(Math.sin(a)) * 0.4) * flick;
+      const grd = skyCtx.createLinearGradient(-size, -size * 0.6, size, size * 0.6);
+      grd.addColorStop(0, `rgb(${40 + tone * 0.4 + lit * 60},${34 + tone * 0.32 + lit * 40},${30 + tone * 0.3 + lit * 24})`);
+      grd.addColorStop(1, `rgb(${18},${16},${15})`);
+      skyCtx.fillStyle = grd;
+      skyCtx.beginPath();
+      skyCtx.ellipse(0, 0, size, size * 0.62, 0, 0, Math.PI * 2);
+      skyCtx.fill();
+      skyCtx.restore();
+    }
+  }
+
+  function drawLogs(fx, fy, flick) {
+    // two crossed logs peeking from beneath the flame base, charred on top
+    const pairs = [
+      { a: [-95, 26], b: [100, -10], w: 17 },
+      { a: [-85, -8], b: [95, 30], w: 16 },
+      { a: [-40, 36], b: [55, 40], w: 14 },
+    ];
+    const extra = Math.min(2, Math.max(0, state.logs - 2));
+    for (let i = 0; i < extra; i++) {
+      pairs.push({ a: [-70 + i * 10, 18 - i * 6], b: [70 - i * 14, -4 + i * 8], w: 13 });
+    }
+    for (const p of pairs) {
+      const ax = fx + p.a[0], ay = fy + p.a[1] + 54;
+      const bx = fx + p.b[0], by = fy + p.b[1] + 54;
+      const grd = skyCtx.createLinearGradient(ax, ay, bx, by);
+      const base = 30 + flick * 10;
+      grd.addColorStop(0, `rgb(${base + 30},${base * 0.6},${base * 0.35})`);
+      grd.addColorStop(0.5, `rgb(${base + 55},${base * 0.75 + 10},${base * 0.4})`);
+      grd.addColorStop(1, `rgb(${base + 20},${base * 0.55},${base * 0.3})`);
+      skyCtx.strokeStyle = grd;
+      skyCtx.lineCap = "round";
+      skyCtx.lineWidth = p.w;
+      skyCtx.beginPath();
+      skyCtx.moveTo(ax, ay);
+      skyCtx.lineTo(bx, by);
+      skyCtx.stroke();
+      // charred underside
+      skyCtx.strokeStyle = "rgba(10,7,6,0.55)";
+      skyCtx.lineWidth = p.w * 0.45;
+      skyCtx.beginPath();
+      skyCtx.moveTo(ax, ay + p.w * 0.3);
+      skyCtx.lineTo(bx, by + p.w * 0.3);
+      skyCtx.stroke();
+    }
+  }
+
+  // ===========================================================================
+  // 2) WEBGL FIRE — fractal-noise flame shader, wind + fuel reactive
+  // ===========================================================================
+  const gl = fireCanvas.getContext("webgl", { alpha: true, premultipliedAlpha: true }) ||
+             fireCanvas.getContext("experimental-webgl", { alpha: true });
+
+  const VERT = `
+    attribute vec2 aPos;
+    varying vec2 vUv;
+    void main() {
+      // Flip Y so vUv matches screen/canvas convention (0 = top, 1 = bottom),
+      // same convention used to compute uBase from pixel coordinates.
+      vUv = vec2(aPos.x * 0.5 + 0.5, 1.0 - (aPos.y * 0.5 + 0.5));
+      gl_Position = vec4(aPos, 0.0, 1.0);
+    }
+  `;
+
+  const FRAG = `
+    precision highp float;
+    varying vec2 vUv;
+    uniform vec2 uRes;
+    uniform float uTime;
+    uniform float uWind;
+    uniform float uFuel;
+    uniform float uPoke;
+    uniform vec2 uBase;   // normalized screen-space base of the fire (0..1)
+
+    float hash21(vec2 p) {
+      p = fract(p * vec2(123.34, 345.45));
+      p += dot(p, p + 34.345);
+      return fract(p.x * p.y);
+    }
+    float noise(vec2 p) {
+      vec2 i = floor(p), f = fract(p);
+      float a = hash21(i);
+      float b = hash21(i + vec2(1.0, 0.0));
+      float c = hash21(i + vec2(0.0, 1.0));
+      float d = hash21(i + vec2(1.0, 1.0));
+      vec2 u = f * f * (3.0 - 2.0 * f);
+      return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+    }
+    float fbm(vec2 p) {
+      float v = 0.0, amp = 0.5;
+      for (int i = 0; i < 5; i++) {
+        v += amp * noise(p);
+        p *= 2.02;
+        amp *= 0.52;
+      }
+      return v;
+    }
+
+    void main() {
+      vec2 uv = vUv;
+      float aspect = uRes.x / uRes.y;
+      vec2 p = (uv - uBase);
+      p.x *= aspect;
+
+      float h = clamp((uBase.y - uv.y) / 0.42, 0.0, 1.6); // 0 at base, grows upward
+      if (uv.y > uBase.y + 0.02) { gl_FragColor = vec4(0.0); return; }
+
+      // lean with wind + a soft "poke" gust, stronger higher up the flame
+      float lean = (uWind * 0.55 + sin(uTime * 1.3) * 0.05 + uPoke * 0.9) * pow(h, 1.3);
+      float wobble = sin(uTime * 3.1 + h * 5.0) * 0.04 * h;
+      float sx = (p.x - lean * 0.18 - wobble) / (0.16 + h * 0.10);
+
+      vec2 q = vec2(sx * 1.6, h * 2.6 - uTime * (1.6 + uFuel * 0.6));
+      float n = fbm(q + vec2(0.0, -uTime * 0.4));
+      float n2 = fbm(q * 2.3 + 11.0 - vec2(0.0, uTime * 1.1));
+
+      float widthFall = exp(-h * h * (1.15 - uFuel * 0.12));
+      float core = widthFall - abs(sx) * (0.85 - uFuel * 0.08);
+      float flame = core + (n - 0.5) * 0.55 + (n2 - 0.5) * 0.22 - h * 0.18;
+      flame += uPoke * 0.25;
+      flame = clamp(flame, 0.0, 1.0);
+
+      float heat = clamp(flame * (1.35 - h * 0.55) * uFuel, 0.0, 1.4);
+
+      vec3 col;
+      if (heat < 0.25) col = mix(vec3(0.03,0.0,0.0), vec3(0.45,0.05,0.0), heat / 0.25);
+      else if (heat < 0.55) col = mix(vec3(0.45,0.05,0.0), vec3(0.95,0.35,0.02), (heat-0.25)/0.30);
+      else if (heat < 0.85) col = mix(vec3(0.95,0.35,0.02), vec3(1.0,0.75,0.15), (heat-0.55)/0.30);
+      else col = mix(vec3(1.0,0.75,0.15), vec3(1.0,0.98,0.85), clamp((heat-0.85)/0.4,0.0,1.0));
+
+      float alpha = smoothstep(0.08, 0.5, flame) * smoothstep(1.05, 0.15, h);
+      alpha *= smoothstep(0.0, 0.08, 1.0 - abs(sx) * 0.6);
+      gl_FragColor = vec4(col * alpha, alpha);
+    }
+  `;
+
+  function compile(type, src) {
+    const sh = gl.createShader(type);
+    gl.shaderSource(sh, src);
+    gl.compileShader(sh);
+    if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
+      console.error(gl.getShaderInfoLog(sh));
+    }
+    return sh;
+  }
+
+  const program = gl.createProgram();
+  gl.attachShader(program, compile(gl.VERTEX_SHADER, VERT));
+  gl.attachShader(program, compile(gl.FRAGMENT_SHADER, FRAG));
+  gl.linkProgram(program);
+  gl.useProgram(program);
+
+  const quad = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, quad);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 1,-1, -1,1, 1,1]), gl.STATIC_DRAW);
+  const aPos = gl.getAttribLocation(program, "aPos");
+  gl.enableVertexAttribArray(aPos);
+  gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+
+  const uRes = gl.getUniformLocation(program, "uRes");
+  const uTime = gl.getUniformLocation(program, "uTime");
+  const uWind = gl.getUniformLocation(program, "uWind");
+  const uFuel = gl.getUniformLocation(program, "uFuel");
+  const uPoke = gl.getUniformLocation(program, "uPoke");
+  const uBase = gl.getUniformLocation(program, "uBase");
+
+  gl.enable(gl.BLEND);
+  gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+
+  function drawFire(t) {
+    gl.viewport(0, 0, fireCanvas.width, fireCanvas.height);
+    gl.clearColor(0, 0, 0, 0);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    gl.useProgram(program);
+    gl.uniform2f(uRes, fireCanvas.width, fireCanvas.height);
+    gl.uniform1f(uTime, t);
+    gl.uniform1f(uWind, state.wind);
+    gl.uniform1f(uFuel, state.fuel);
+    gl.uniform1f(uPoke, state.poke);
+    gl.uniform2f(uBase, fireBaseX() / state.w, fireBaseY() / state.h);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+  }
+
+  // ===========================================================================
+  // 3) PARTICLES — embers rising, smoke drifting, spark bursts on interaction
+  // ===========================================================================
+  let embers = [];
+  let smoke = [];
+
+  function spawnEmber(burst) {
+    const fx = fireBaseX(), fy = fireBaseY();
+    embers.push({
+      x: fx + (Math.random() - 0.5) * 70,
+      y: fy - Math.random() * 20,
+      vx: (Math.random() - 0.5) * 0.4 + state.wind * 0.6,
+      vy: -(Math.random() * 1.6 + (burst ? 2.6 : 1.1)) * state.dpr,
+      life: 1,
+      decay: 0.004 + Math.random() * 0.006,
+      size: Math.random() * 2.2 + (burst ? 1.4 : 0.7),
+      flick: Math.random() * Math.PI * 2,
+    });
+  }
+  // Rough estimate (in pixels) of how far the visible flame tip reaches above
+  // the base, mirroring the shader's falloff so smoke only starts past it.
+  function flameTipOffset() {
+    return state.h * 0.42 * (0.95 + state.fuel * 0.22 + state.poke * 0.25);
+  }
+
+  function spawnSmoke() {
+    const fx = fireBaseX(), fy = fireBaseY();
+    const tip = flameTipOffset();
+    // Smoke should wisp up from the already-faded tip of the flame, drifting
+    // the same way the flame itself leans, not from inside the bright core.
+    const lean = state.wind * tip * 0.22;
+    smoke.push({
+      x: fx + lean + (Math.random() - 0.5) * 34,
+      y: fy - tip - Math.random() * 16,
+      vx: (Math.random() - 0.5) * 0.18 + state.wind * 0.55,
+      vy: -(Math.random() * 0.35 + 0.28),
+      life: 1,
+      decay: 0.0048 + Math.random() * 0.0022,
+      size: Math.random() * 9 + 7,
+    });
+  }
+
+  function updateAndDrawParticles(dt) {
+    const { w, h, dpr } = state;
+    fxCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    fxCtx.clearRect(0, 0, w, h);
+
+    // spawn rate scales with fuel / poke
+    const emberRate = (3 + state.fuel * 4 + state.poke * 10) * dt;
+    for (let i = 0; i < emberRate; i++) if (Math.random() < 1) spawnEmber(state.poke > 0.3);
+    if (Math.random() < 0.6 * dt * 60) spawnSmoke();
+
+    fxCtx.globalCompositeOperation = "lighter";
+    embers = embers.filter((e) => e.life > 0);
+    for (const e of embers) {
+      e.x += e.vx * dt * 60;
+      e.y += e.vy * dt * 60;
+      e.vy -= 0.004 * dt * 60; // accelerate upward like hot air
+      e.vx += (Math.sin(e.flick + state.time * 3) * 0.01);
+      e.life -= e.decay * dt * 60;
+      const a = Math.max(0, e.life);
+      const col = a > 0.5 ? `rgba(255,${180 + a*60},${60 + a*80},${a})` : `rgba(255,${90+a*120},20,${a})`;
+      fxCtx.fillStyle = col;
+      fxCtx.beginPath();
+      fxCtx.arc(e.x, e.y, e.size * (0.6 + a * 0.6), 0, 7);
+      fxCtx.fill();
+    }
+
+    fxCtx.globalCompositeOperation = "source-over";
+    smoke = smoke.filter((s) => s.life > 0);
+    for (const s of smoke) {
+      s.x += s.vx * dt * 60;
+      s.y += s.vy * dt * 60;
+      s.vx += state.wind * 0.012;
+      s.size += 0.045 * dt * 60;
+      s.life -= s.decay * dt * 60;
+      // Fades in briefly as it emerges, then fades out — avoids a hard-edged
+      // blob appearing abruptly over the flame.
+      const emerge = Math.min(1, (1 - s.life) * 6);
+      const a = Math.max(0, s.life) * emerge * 0.07;
+      fxCtx.fillStyle = `rgba(150,142,134,${a})`;
+      fxCtx.beginPath();
+      fxCtx.arc(s.x, s.y, s.size, 0, 7);
+      fxCtx.fill();
+    }
+  }
+
+  // ===========================================================================
+  // 4) INTERACTION — pointer steers wind; click/tap blows & stokes the fire
+  // ===========================================================================
+  const hint = document.getElementById("hint");
+  let hintHidden = false;
+  function fadeHint() {
+    if (hintHidden) return;
+    hintHidden = true;
+    hint.style.opacity = "0";
+  }
+
+  function setPointerFromEvent(clientX, clientY) {
+    const nx = clientX / state.w;
+    const ny = clientY / state.h;
+    state.pointer.vx = nx - state.pointer.lastX;
+    state.pointer.vy = ny - state.pointer.lastY;
+    state.pointer.lastX = nx;
+    state.pointer.lastY = ny;
+    state.pointer.x = nx;
+    state.pointer.y = ny;
+    // wind target: how far left/right of the fire's base the pointer is
+    const dx = nx - fireBaseX() / state.w;
+    state.windTarget = Math.max(-1.4, Math.min(1.4, dx * 3.2));
+  }
+
+  function onMove(e) {
+    const t = e.touches ? e.touches[0] : e;
+    if (!t) return;
+    setPointerFromEvent(t.clientX, t.clientY);
+  }
+
+  function onDown(e) {
+    const t = e.touches ? e.touches[0] : e;
+    state.pointer.active = true;
+    fadeHint();
+    if (t) setPointerFromEvent(t.clientX, t.clientY);
+    blow();
+  }
+  function onUp() { state.pointer.active = false; }
+
+  window.addEventListener("mousemove", onMove, { passive: true });
+  window.addEventListener("mousedown", onDown, { passive: true });
+  window.addEventListener("mouseup", onUp, { passive: true });
+  window.addEventListener("touchstart", onDown, { passive: true });
+  window.addEventListener("touchmove", onMove, { passive: true });
+  window.addEventListener("touchend", onUp, { passive: true });
+  window.addEventListener("resize", () => { resize(); buildStars(); });
+
+  function blow() {
+    state.poke = Math.min(1.6, state.poke + 0.9);
+    for (let i = 0; i < 18; i++) spawnEmber(true);
+    playCrackle(true);
+  }
+  function addLog() {
+    state.logs = Math.min(5, state.logs + 1);
+    state.fuel = Math.min(2.2, state.fuel + 0.35);
+    for (let i = 0; i < 12; i++) spawnEmber(true);
+    playCrackle(false);
+  }
+
+  document.getElementById("btnBlow").addEventListener("click", blow);
+  document.getElementById("btnLog").addEventListener("click", addLog);
+
+  // ===========================================================================
+  // 5) SOUND — synthesized crackling fire via Web Audio (no external assets)
+  // ===========================================================================
+  let actx = null;
+  let noiseSrc = null;
+  let noiseGain = null;
+  const soundBtn = document.getElementById("btnSound");
+
+  function ensureAudio() {
+    if (actx) return;
+    actx = new (window.AudioContext || window.webkitAudioContext)();
+    const bufferSize = 2 * actx.sampleRate;
+    const buffer = actx.createBuffer(1, bufferSize, actx.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < bufferSize; i++) data[i] = Math.random() * 2 - 1;
+    noiseSrc = actx.createBufferSource();
+    noiseSrc.buffer = buffer;
+    noiseSrc.loop = true;
+    const filter = actx.createBiquadFilter();
+    filter.type = "bandpass";
+    filter.frequency.value = 900;
+    filter.Q.value = 0.6;
+    noiseGain = actx.createGain();
+    noiseGain.gain.value = 0;
+    noiseSrc.connect(filter).connect(noiseGain).connect(actx.destination);
+    noiseSrc.start();
+  }
+
+  function playCrackle(strong) {
+    if (!state.soundOn || !actx) return;
+    const now = actx.currentTime;
+    const o = actx.createOscillator();
+    const g = actx.createGain();
+    o.type = "square";
+    o.frequency.value = 120 + Math.random() * 300;
+    g.gain.value = 0;
+    g.gain.linearRampToValueAtTime(strong ? 0.18 : 0.1, now + 0.005);
+    g.gain.exponentialRampToValueAtTime(0.0001, now + (strong ? 0.18 : 0.08));
+    o.connect(g).connect(actx.destination);
+    o.start(now);
+    o.stop(now + 0.2);
+  }
+
+  function randomPop() {
+    if (!state.soundOn) return;
+    if (Math.random() < 0.02) playCrackle(Math.random() < 0.3);
+  }
+
+  soundBtn.addEventListener("click", () => {
+    ensureAudio();
+    if (actx.state === "suspended") actx.resume();
+    state.soundOn = !state.soundOn;
+    soundBtn.textContent = state.soundOn ? "🔊 Som" : "🔇 Som";
+    soundBtn.classList.toggle("toggled", state.soundOn);
+    if (noiseGain) {
+      noiseGain.gain.linearRampToValueAtTime(state.soundOn ? 0.05 : 0, actx.currentTime + 0.4);
+    }
+  });
+
+  // ===========================================================================
+  // 6) MAIN LOOP
+  // ===========================================================================
+  let lastT = performance.now();
+  function frame(now) {
+    const dt = Math.min(0.05, (now - lastT) / 1000);
+    lastT = now;
+    state.time += dt;
+
+    // ease wind toward target (pointer-driven) and relax the "poke" gust
+    state.wind += (state.windTarget - state.wind) * Math.min(1, dt * 2.2);
+    state.poke *= Math.pow(0.04, dt);
+    // fuel slowly relaxes back toward a level tied to how much wood is stacked
+    const fuelRest = 0.85 + state.logs * 0.12;
+    state.fuel += (fuelRest - state.fuel) * Math.min(1, dt * 0.6);
+
+    drawSky(state.time);
+    drawFire(state.time);
+    updateAndDrawParticles(dt);
+    randomPop();
+
+    requestAnimationFrame(frame);
+  }
+
+  resize();
+  buildStars();
+  requestAnimationFrame(frame);
+  setTimeout(fadeHint, 7000);
+})();
+</script>
+</body>
+</html>
