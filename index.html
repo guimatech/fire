@@ -98,18 +98,50 @@
   const fxCtx = fxCanvas.getContext("2d");
 
   // ===========================================================================
-  // 1) NIGHT SKY — stars, gentle gradient, ground glow, logs & stone ring
+  // 1) SCENE — night sky, distant forest, ground, cast shadows, stone ring,
+  //    a teepee of logs with its glowing ember bed, and seats around the fire
+  //    (a stump + a fallen log, echoing the original CampfireSeats study).
   // ===========================================================================
   let stars = [];
   function buildStars() {
     const count = Math.floor((state.w * state.h) / 3600);
     stars = new Array(count).fill(0).map(() => ({
       x: Math.random(),
-      y: Math.random() * 0.72,
+      y: Math.random() * 0.68,
       r: Math.random() * 1.4 + 0.2,
       phase: Math.random() * Math.PI * 2,
       speed: Math.random() * 0.8 + 0.3,
     }));
+  }
+
+  function hashN(n) {
+    const x = Math.sin(n * 127.1 + 78.233) * 43758.5453;
+    return x - Math.floor(x);
+  }
+
+  function fireBaseX() { return state.w * 0.5; }
+  function fireBaseY() { return state.h * 0.74; }
+
+  // A soft directional cast shadow stretching away from the fire — this is
+  // the main thing that sells "depth": every object on the ground reads as
+  // sitting in the same lit clearing instead of floating on a flat backdrop.
+  function castShadow(x, y, angle, len, width, alpha) {
+    if (alpha <= 0.001) return;
+    skyCtx.save();
+    skyCtx.translate(x, y);
+    skyCtx.rotate(angle);
+    const grd = skyCtx.createLinearGradient(0, 0, len, 0);
+    grd.addColorStop(0, `rgba(3,2,2,${alpha})`);
+    grd.addColorStop(0.55, `rgba(3,2,2,${alpha * 0.4})`);
+    grd.addColorStop(1, "rgba(3,2,2,0)");
+    skyCtx.fillStyle = grd;
+    skyCtx.beginPath();
+    skyCtx.ellipse(len * 0.5, 0, len * 0.52, width * 0.5, 0, 0, Math.PI * 2);
+    skyCtx.fill();
+    skyCtx.restore();
+  }
+  function shadowAngleFor(x, y, fx, fy) {
+    return Math.atan2(y - fy, x - fx || 0.0001);
   }
 
   function drawSky(t) {
@@ -134,12 +166,15 @@
     }
     skyCtx.globalAlpha = 1;
 
-    // warm ambient glow thrown onto the ground / horizon by the fire
     const fireX = fireBaseX();
     const fireY = fireBaseY();
+    const flick = 0.75 + Math.sin(t * 7.3) * 0.06 + Math.sin(t * 2.1) * 0.05;
+
+    drawForest(fireX, fireY);
+
+    // warm ambient glow thrown onto the ground / horizon by the fire
     const glowR = Math.max(w, h) * 0.55 * (0.85 + state.fuel * 0.18);
     const glow = skyCtx.createRadialGradient(fireX, fireY, 10, fireX, fireY, glowR);
-    const flick = 0.75 + Math.sin(t * 7.3) * 0.06 + Math.sin(t * 2.1) * 0.05;
     glow.addColorStop(0, `rgba(255,150,60,${0.35 * flick})`);
     glow.addColorStop(0.35, `rgba(255,100,30,${0.14 * flick})`);
     glow.addColorStop(1, "rgba(255,100,30,0)");
@@ -147,12 +182,43 @@
     skyCtx.fillRect(0, 0, w, h);
 
     drawGround(fireX, fireY, flick);
+    drawSeatsAndShrubs(fireX, fireY, flick);
     drawStoneRing(fireX, fireY, flick);
     drawLogs(fireX, fireY, flick);
+
+    // vignette for cinematic depth — keeps the eye pulled toward the fire
+    const vg = skyCtx.createRadialGradient(w / 2, h * 0.56, Math.min(w, h) * 0.22, w / 2, h * 0.56, Math.max(w, h) * 0.78);
+    vg.addColorStop(0, "rgba(0,0,0,0)");
+    vg.addColorStop(1, "rgba(0,0,0,0.5)");
+    skyCtx.fillStyle = vg;
+    skyCtx.fillRect(0, 0, w, h);
   }
 
-  function fireBaseX() { return state.w * 0.5; }
-  function fireBaseY() { return state.h * 0.74; }
+  // Distant, hazy forest silhouette ringing the clearing — gives the scene a
+  // sense of surrounding woods instead of an empty void, without competing
+  // with the fire itself (there is a cleared gap directly behind the flame).
+  function drawForest(fx, fy) {
+    const horizon = fy + 8;
+    const n = 30;
+    for (let i = 0; i < n; i++) {
+      const x = ((i + 0.5) / n) * state.w + (hashN(i * 9.1) - 0.5) * 50;
+      if (Math.abs(x - fx) < 95) continue;
+      const depth = hashN(i * 4.3);
+      const height = (55 + depth * 150 + hashN(i * 13.7) * 40);
+      const width = 24 + depth * 50;
+      const topY = horizon - height;
+      const tone = Math.round(6 + depth * 9);
+      skyCtx.fillStyle = `rgb(${tone},${tone + 3},${tone + 6})`;
+      for (let k = 0; k < 3; k++) {
+        const cy = topY + k * height * 0.3;
+        const cw = width * (0.95 - k * 0.22);
+        skyCtx.beginPath();
+        skyCtx.ellipse(x + (hashN(i * 17 + k) - 0.5) * 10, cy, cw * 0.5, height * 0.24, 0, 0, Math.PI * 2);
+        skyCtx.fill();
+      }
+      skyCtx.fillRect(x - width * 0.08, topY + height * 0.5, width * 0.16, height * 0.55);
+    }
+  }
 
   function drawGround(fx, fy, flick) {
     const { w, h } = state;
@@ -171,11 +237,6 @@
     skyCtx.fillRect(0, 0, w, h);
   }
 
-  function hashN(n) {
-    const x = Math.sin(n * 127.1 + 78.233) * 43758.5453;
-    return x - Math.floor(x);
-  }
-
   function drawStoneRing(fx, fy, flick) {
     const n = 11;
     const ringR = Math.min(state.w, state.h) * 0.165;
@@ -186,6 +247,9 @@
       const y = fy + Math.sin(a) * jitterR * 0.38 + 46;
       const size = 16 + hashN(i * 7.7) * 10;
       const tone = 60 + hashN(i * 11.3) * 40;
+
+      castShadow(x, y, shadowAngleFor(x, y, fx, fy), size * 2.6, size * 1.1, 0.42 * flick);
+
       skyCtx.save();
       skyCtx.translate(x, y);
       skyCtx.rotate(hashN(i * 5.9) * 1.2 - 0.6);
@@ -201,40 +265,193 @@
     }
   }
 
-  function drawLogs(fx, fy, flick) {
-    // two crossed logs peeking from beneath the flame base, charred on top
-    const pairs = [
-      { a: [-95, 26], b: [100, -10], w: 17 },
-      { a: [-85, -8], b: [95, 30], w: 16 },
-      { a: [-40, 36], b: [55, 40], w: 14 },
-    ];
-    const extra = Math.min(2, Math.max(0, state.logs - 2));
-    for (let i = 0; i < extra; i++) {
-      pairs.push({ a: [-70 + i * 10, 18 - i * 6], b: [70 - i * 14, -4 + i * 8], w: 13 });
+  // --- Seats + shrubs around the fire -----------------------------------
+  function drawShrub(x, y, scale, seed) {
+    const leaves = 7;
+    for (let i = 0; i < leaves; i++) {
+      const a = (i / leaves) * Math.PI - Math.PI / 2 + (hashN(i * 3.3 + seed) - 0.5) * 0.8;
+      const len = (16 + hashN(i * 5.1 + seed) * 16) * scale;
+      const lx = x + Math.cos(a) * len * 0.55;
+      const ly = y - Math.abs(Math.sin(a)) * len * 0.55 - len * 0.32;
+      const g = 38 + hashN(i * 2.2 + seed) * 20;
+      skyCtx.fillStyle = `rgba(${14 + g * 0.2},${g},${g * 0.78},0.92)`;
+      skyCtx.beginPath();
+      skyCtx.ellipse(lx, ly, len * 0.22, len * 0.6, a, 0, Math.PI * 2);
+      skyCtx.fill();
     }
-    for (const p of pairs) {
-      const ax = fx + p.a[0], ay = fy + p.a[1] + 54;
-      const bx = fx + p.b[0], by = fy + p.b[1] + 54;
+  }
+
+  function drawStumpSeat(x, y, scale, fx, fy, flick) {
+    const angle = shadowAngleFor(x, y, fx, fy);
+    castShadow(x, y + 8 * scale, angle, 170 * scale, 64 * scale, 0.45 * flick);
+
+    const h = 78 * scale, rTop = 48 * scale, rBot = 56 * scale;
+    const grd = skyCtx.createLinearGradient(x - rBot, y, x + rBot, y);
+    grd.addColorStop(0, "rgba(32,22,16,1)");
+    grd.addColorStop(0.5, "rgba(62,42,28,1)");
+    grd.addColorStop(1, "rgba(26,18,13,1)");
+    skyCtx.fillStyle = grd;
+    skyCtx.beginPath();
+    skyCtx.moveTo(x - rTop, y - h);
+    skyCtx.lineTo(x + rTop, y - h);
+    skyCtx.lineTo(x + rBot, y);
+    skyCtx.lineTo(x - rBot, y);
+    skyCtx.closePath();
+    skyCtx.fill();
+
+    // bark grain
+    skyCtx.strokeStyle = "rgba(16,11,8,0.5)";
+    skyCtx.lineWidth = Math.max(1, 1.4 * scale);
+    for (let i = -3; i <= 3; i++) {
+      const bx = x + i * rTop * 0.28;
+      skyCtx.beginPath();
+      skyCtx.moveTo(bx, y - h + 4 * scale);
+      skyCtx.lineTo(bx + i * 2.2 * scale, y - 4 * scale);
+      skyCtx.stroke();
+    }
+
+    // cut top, warmly lit growth rings
+    const lit = Math.max(0.12, 1 - Math.abs(x - fx) / (state.w * 0.9)) * flick;
+    const topGrd = skyCtx.createRadialGradient(x, y - h, 2, x, y - h, rTop);
+    topGrd.addColorStop(0, `rgba(${150 + lit * 60},${112 + lit * 46},${72 + lit * 26},1)`);
+    topGrd.addColorStop(1, "rgba(86,60,38,1)");
+    skyCtx.fillStyle = topGrd;
+    skyCtx.beginPath();
+    skyCtx.ellipse(x, y - h, rTop, rTop * 0.38, 0, 0, Math.PI * 2);
+    skyCtx.fill();
+    skyCtx.strokeStyle = "rgba(58,38,24,0.55)";
+    skyCtx.lineWidth = 1;
+    for (let r = rTop * 0.28; r < rTop; r += rTop * 0.24) {
+      skyCtx.beginPath();
+      skyCtx.ellipse(x, y - h, r, r * 0.38, 0, 0, Math.PI * 2);
+      skyCtx.stroke();
+    }
+  }
+
+  function drawLogSeat(x, y, scale, rot, fx, fy, flick) {
+    const angle = shadowAngleFor(x, y, fx, fy);
+    castShadow(x, y + 8 * scale, angle, 150 * scale, 48 * scale, 0.35 * flick);
+
+    const len = 160 * scale, rad = 25 * scale;
+    skyCtx.save();
+    skyCtx.translate(x, y);
+    skyCtx.rotate(rot);
+    const grd = skyCtx.createLinearGradient(0, -rad, 0, rad);
+    grd.addColorStop(0, "rgba(94,66,42,1)");
+    grd.addColorStop(0.5, "rgba(58,40,26,1)");
+    grd.addColorStop(1, "rgba(28,19,13,1)");
+    skyCtx.fillStyle = grd;
+    skyCtx.beginPath();
+    if (skyCtx.roundRect) skyCtx.roundRect(-len / 2, -rad, len, rad * 2, rad);
+    else skyCtx.rect(-len / 2, -rad, len, rad * 2);
+    skyCtx.fill();
+
+    const capGrd = skyCtx.createRadialGradient(len / 2, 0, 2, len / 2, 0, rad);
+    capGrd.addColorStop(0, "rgba(150,112,76,1)");
+    capGrd.addColorStop(1, "rgba(66,46,30,1)");
+    skyCtx.fillStyle = capGrd;
+    skyCtx.beginPath();
+    skyCtx.ellipse(len / 2, 0, rad * 0.5, rad, 0, 0, Math.PI * 2);
+    skyCtx.fill();
+    skyCtx.restore();
+  }
+
+  function drawSeatsAndShrubs(fx, fy, flick) {
+    const scale = Math.min(state.w, state.h) / 1000;
+    const ringR = Math.min(state.w, state.h) * 0.165;
+
+    // Tree-stump seat: closer to camera, lower-left of the fire.
+    const stumpX = fx - ringR * 2.05;
+    const stumpY = fy + ringR * 0.95;
+    drawShrub(stumpX - 50 * scale, stumpY + 16 * scale, scale * 1.3, 4);
+    drawStumpSeat(stumpX, stumpY, scale * 1.35, fx, fy, flick);
+
+    // Fallen-log seat: further back, upper-right of the fire.
+    const logX = fx + ringR * 1.9;
+    const logY = fy - ringR * 1.0;
+    drawLogSeat(logX, logY, scale * 1.05, -0.34, fx, fy, flick);
+    drawShrub(logX + 58 * scale, logY + 30 * scale, scale * 0.8, 11);
+
+    // a couple of extra low shrubs scattered around for depth filler
+    drawShrub(fx - ringR * 0.95, fy + ringR * 0.6, scale * 0.65, 17);
+    drawShrub(fx + ringR * 1.05, fy + ringR * 0.68, scale * 0.6, 23);
+  }
+
+  function drawLogs(fx, fy, flick) {
+    const scale = Math.min(state.w, state.h) / 1000;
+    const baseY = fy + 50;
+
+    // --- glowing ember bed: hot coals visible beneath/between the logs ---
+    const emberCount = 9;
+    for (let i = 0; i < emberCount; i++) {
+      const ex = fx + (hashN(i * 2.7) - 0.5) * 78 * scale;
+      const ey = baseY - 2 + (hashN(i * 5.3) - 0.5) * 16 * scale;
+      const pulse = 0.6 + Math.sin(state.time * (4 + hashN(i * 9) * 3) + i) * 0.4;
+      const r = (7 + hashN(i * 3.9) * 7) * scale * (0.7 + state.fuel * 0.18);
+      const hot = Math.max(0, Math.min(1, pulse * flick));
+      const grd = skyCtx.createRadialGradient(ex, ey, 0, ex, ey, r);
+      grd.addColorStop(0, `rgba(255,${210 + hot * 40},${120 + hot * 80},${0.85 * hot + 0.15})`);
+      grd.addColorStop(0.6, `rgba(255,120,30,${0.35 * hot})`);
+      grd.addColorStop(1, "rgba(255,80,10,0)");
+      skyCtx.fillStyle = grd;
+      skyCtx.beginPath();
+      skyCtx.arc(ex, ey, r, 0, 7);
+      skyCtx.fill();
+    }
+
+    // --- teepee poles leaning in toward the flame, charred, lit from below ---
+    const poles = [
+      { bx: -82, apx: -6, h: 196, w: 17 },
+      { bx: -56, apx: 12, h: 206, w: 15 },
+      { bx: 64, apx: 4, h: 198, w: 17 },
+      { bx: 44, apx: -10, h: 208, w: 15 },
+      { bx: -18, apx: 22, h: 182, w: 13 },
+      { bx: 20, apx: -20, h: 184, w: 13 },
+    ];
+    const extraLogs = Math.max(0, state.logs - 2);
+    for (let i = 0; i < Math.min(2, extraLogs); i++) {
+      poles.push({ bx: -30 + i * 60, apx: i === 0 ? 34 : -34, h: 170 - i * 6, w: 12 });
+    }
+    for (const p of poles) {
+      const ax = fx + p.bx * scale, ay = baseY + 6 * scale;
+      const bx = fx + p.apx * scale, by = baseY - p.h * scale;
       const grd = skyCtx.createLinearGradient(ax, ay, bx, by);
-      const base = 30 + flick * 10;
-      grd.addColorStop(0, `rgb(${base + 30},${base * 0.6},${base * 0.35})`);
-      grd.addColorStop(0.5, `rgb(${base + 55},${base * 0.75 + 10},${base * 0.4})`);
-      grd.addColorStop(1, `rgb(${base + 20},${base * 0.55},${base * 0.3})`);
+      const warm = 0.5 + flick * 0.5;
+      grd.addColorStop(0, `rgba(${90 + warm * 120},${50 + warm * 60},${20 + warm * 20},1)`);
+      grd.addColorStop(0.18, "rgba(55,32,20,1)");
+      grd.addColorStop(0.6, "rgba(28,20,17,1)");
+      grd.addColorStop(1, "rgba(16,12,11,1)");
       skyCtx.strokeStyle = grd;
       skyCtx.lineCap = "round";
-      skyCtx.lineWidth = p.w;
+      skyCtx.lineWidth = p.w * scale;
       skyCtx.beginPath();
       skyCtx.moveTo(ax, ay);
       skyCtx.lineTo(bx, by);
       skyCtx.stroke();
-      // charred underside
-      skyCtx.strokeStyle = "rgba(10,7,6,0.55)";
-      skyCtx.lineWidth = p.w * 0.45;
-      skyCtx.beginPath();
-      skyCtx.moveTo(ax, ay + p.w * 0.3);
-      skyCtx.lineTo(bx, by + p.w * 0.3);
-      skyCtx.stroke();
     }
+
+    // --- foreground grate log lying across the base, closest to camera ---
+    const gx1 = fx - 68 * scale, gy1 = baseY + 20 * scale;
+    const gx2 = fx + 66 * scale, gy2 = baseY + 14 * scale;
+    const shAngle = shadowAngleFor((gx1 + gx2) / 2, Math.max(gy1, gy2), fx, fy);
+    castShadow((gx1 + gx2) / 2, Math.max(gy1, gy2) + 6 * scale, shAngle, 150 * scale, 50 * scale, 0.4 * flick);
+    const grateGrd = skyCtx.createLinearGradient(gx1, gy1, gx2, gy2);
+    grateGrd.addColorStop(0, `rgb(${50 + flick * 25},${30 + flick * 14},${18 + flick * 8})`);
+    grateGrd.addColorStop(0.5, `rgb(${75 + flick * 40},${44 + flick * 20},${24 + flick * 10})`);
+    grateGrd.addColorStop(1, `rgb(${45 + flick * 20},${27 + flick * 10},${16 + flick * 6})`);
+    skyCtx.strokeStyle = grateGrd;
+    skyCtx.lineCap = "round";
+    skyCtx.lineWidth = 19 * scale;
+    skyCtx.beginPath();
+    skyCtx.moveTo(gx1, gy1);
+    skyCtx.lineTo(gx2, gy2);
+    skyCtx.stroke();
+    skyCtx.strokeStyle = "rgba(8,6,5,0.6)";
+    skyCtx.lineWidth = 8 * scale;
+    skyCtx.beginPath();
+    skyCtx.moveTo(gx1, gy1 + 6 * scale);
+    skyCtx.lineTo(gx2, gy2 + 6 * scale);
+    skyCtx.stroke();
   }
 
   // ===========================================================================
@@ -336,42 +553,50 @@
     return sh;
   }
 
-  const program = gl.createProgram();
-  gl.attachShader(program, compile(gl.VERTEX_SHADER, VERT));
-  gl.attachShader(program, compile(gl.FRAGMENT_SHADER, FRAG));
-  gl.linkProgram(program);
-  gl.useProgram(program);
-
-  const quad = gl.createBuffer();
-  gl.bindBuffer(gl.ARRAY_BUFFER, quad);
-  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 1,-1, -1,1, 1,1]), gl.STATIC_DRAW);
-  const aPos = gl.getAttribLocation(program, "aPos");
-  gl.enableVertexAttribArray(aPos);
-  gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
-
-  const uRes = gl.getUniformLocation(program, "uRes");
-  const uTime = gl.getUniformLocation(program, "uTime");
-  const uWind = gl.getUniformLocation(program, "uWind");
-  const uFuel = gl.getUniformLocation(program, "uFuel");
-  const uPoke = gl.getUniformLocation(program, "uPoke");
-  const uBase = gl.getUniformLocation(program, "uBase");
-
-  gl.enable(gl.BLEND);
-  gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
-
-  function drawFire(t) {
-    gl.viewport(0, 0, fireCanvas.width, fireCanvas.height);
-    gl.clearColor(0, 0, 0, 0);
-    gl.clear(gl.COLOR_BUFFER_BIT);
+  // Falls back to a no-op draw if WebGL isn't available on this device —
+  // the rest of the scene (ground, shadows, seats, logs) still renders fine.
+  let drawFire = function () {};
+  if (gl) {
+    const program = gl.createProgram();
+    gl.attachShader(program, compile(gl.VERTEX_SHADER, VERT));
+    gl.attachShader(program, compile(gl.FRAGMENT_SHADER, FRAG));
+    gl.linkProgram(program);
     gl.useProgram(program);
-    gl.uniform2f(uRes, fireCanvas.width, fireCanvas.height);
-    gl.uniform1f(uTime, t);
-    gl.uniform1f(uWind, state.wind);
-    gl.uniform1f(uFuel, state.fuel);
-    gl.uniform1f(uPoke, state.poke);
-    gl.uniform2f(uBase, fireBaseX() / state.w, fireBaseY() / state.h);
-    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
+    const quad = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, quad);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 1,-1, -1,1, 1,1]), gl.STATIC_DRAW);
+    const aPos = gl.getAttribLocation(program, "aPos");
+    gl.enableVertexAttribArray(aPos);
+    gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+
+    const uRes = gl.getUniformLocation(program, "uRes");
+    const uTime = gl.getUniformLocation(program, "uTime");
+    const uWind = gl.getUniformLocation(program, "uWind");
+    const uFuel = gl.getUniformLocation(program, "uFuel");
+    const uPoke = gl.getUniformLocation(program, "uPoke");
+    const uBase = gl.getUniformLocation(program, "uBase");
+
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+
+    drawFire = function (t) {
+      gl.viewport(0, 0, fireCanvas.width, fireCanvas.height);
+      gl.clearColor(0, 0, 0, 0);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+      gl.useProgram(program);
+      gl.uniform2f(uRes, fireCanvas.width, fireCanvas.height);
+      gl.uniform1f(uTime, t);
+      gl.uniform1f(uWind, state.wind);
+      gl.uniform1f(uFuel, state.fuel);
+      gl.uniform1f(uPoke, state.poke);
+      gl.uniform2f(uBase, fireBaseX() / state.w, fireBaseY() / state.h);
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    };
+  } else {
+    console.warn("WebGL indisponível — as chamas não serão renderizadas neste dispositivo.");
   }
+
 
   // ===========================================================================
   // 3) PARTICLES — embers rising, smoke drifting, spark bursts on interaction
